@@ -1,8 +1,12 @@
+import ScrollActivityClient
 import XCTest
 
 @testable import ScrollActivityClientLive
 
-import ScrollActivityClient
+extension ScrollActivityClient.Scope {
+    fileprivate static let savedList = Self("savedList")
+    fileprivate static let scanResult = Self("scanResult")
+}
 
 final class ScrollActivityHubTests: XCTestCase {
     /// A fresh subscriber replays the scope's latest phase immediately.

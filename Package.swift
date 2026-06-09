@@ -4,7 +4,11 @@ import PackageDescription
 let package = Package(
     name: "ScrollActivityClient",
     platforms: [
-        .iOS(.v17)
+        .iOS(.v17),
+        // Not a shipping target — only raises the host-side resolution floor so
+        // `swift test` / xcodebuild can resolve swift-dependencies (macOS 10.15+)
+        // when running the iOS-Simulator test bundle.
+        .macOS(.v10_15),
     ],
     products: [
         .singleTargetLibrary("ScrollActivityClient"),

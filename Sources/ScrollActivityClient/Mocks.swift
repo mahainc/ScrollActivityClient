@@ -18,9 +18,8 @@ extension ScrollActivityClient: TestDependencyKey {
 }
 
 extension ScrollActivityClient {
-    /// A no-op implementation: emits no phases and ignores reports.
     public static let noop = Self(
-        phases: { _ in .finished },
+        phases: { _ in AsyncStream { _ in } },
         report: { _, _ in }
     )
 }

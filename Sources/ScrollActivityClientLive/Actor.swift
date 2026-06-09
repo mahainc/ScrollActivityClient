@@ -6,15 +6,14 @@
 import Foundation
 import ScrollActivityClient
 
-/// Fans the latest `ScrollActivityPhase` out to every live `phases(scope)`
-/// subscriber, partitioned by `ScrollScope` so screens stay isolated. Mirrors
-/// `NotificationsStore.makeStream`: a continuation registry keyed by id, cleaned
-/// up on stream termination.
+/// Fans the latest phase out to every live `phases(scope)` subscriber,
+/// partitioned by scope so screens stay isolated.
 actor ScrollActivityHub {
-    private var continuations: [ScrollScope: [UUID: AsyncStream<ScrollActivityPhase>.Continuation]] = [:]
-    private var latest: [ScrollScope: ScrollActivityPhase] = [:]
+    private var continuations:
+        [ScrollActivityClient.Scope: [UUID: AsyncStream<ScrollActivityClient.Phase>.Continuation]] = [:]
+    private var latest: [ScrollActivityClient.Scope: ScrollActivityClient.Phase] = [:]
 
-    func stream(_ scope: ScrollScope) -> AsyncStream<ScrollActivityPhase> {
+    func stream(_ scope: ScrollActivityClient.Scope) -> AsyncStream<ScrollActivityClient.Phase> {
         AsyncStream { continuation in
             let id = UUID()
             continuations[scope, default: [:]][id] = continuation
@@ -26,8 +25,8 @@ actor ScrollActivityHub {
     }
 
     func report(
-        _ scope: ScrollScope,
-        _ phase: ScrollActivityPhase
+        _ scope: ScrollActivityClient.Scope,
+        _ phase: ScrollActivityClient.Phase
     ) {
         guard (latest[scope] ?? .idle) != phase else { return }  // edge-only
         latest[scope] = phase
@@ -39,7 +38,7 @@ actor ScrollActivityHub {
 
     private func removeSubscriber(
         _ id: UUID,
-        scope: ScrollScope
+        scope: ScrollActivityClient.Scope
     ) {
         continuations[scope]?[id] = nil
         if continuations[scope]?.isEmpty == true {

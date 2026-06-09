@@ -8,15 +8,8 @@ import os.log
 private let logger = Logger(subsystem: "ScrollActivityClientLive", category: "ScrollStopObserver")
 
 /// Bridges a `UIScrollView`'s motion into Swift via KVO on `contentOffset`,
-/// without touching the scroll view's delegate (SwiftUI's `List`/`ScrollView`
-/// owns that and would reset it). Reports edges only — `onMove` once when motion
-/// starts, `onStop` once when the view has settled.
-///
-/// "Settled" = `contentOffset` has been quiet for `settleDelay` **and** the
-/// view is free of touch/drag/momentum. A single poll loop (started on the
-/// first movement of a gesture, torn down once at rest) watches both
-/// conditions, so a touch that ends without a final offset change — drag, hold
-/// still, lift — is still detected as a stop.
+/// without touching the scroll view's delegate. Reports edges only — `onMove`
+/// once when motion starts, `onStop` once when the view has settled.
 @MainActor
 final class ScrollStopObserver {
     private weak var scrollView: UIScrollView?
@@ -35,12 +28,10 @@ final class ScrollStopObserver {
     var onStop: (() -> Void)?
 
     func attach(to scrollView: UIScrollView) {
-        // SwiftUIIntrospect's customize closure can fire repeatedly for the same
-        // view — only wire KVO up once per scroll view instance.
+        // SwiftUIIntrospect's customize closure can fire repeatedly — wire KVO up
+        // once per scroll view instance.
         guard self.scrollView !== scrollView else { return }
         self.scrollView = scrollView
-        // No `.new`/`.old`: the handler reads state off the scroll view itself
-        // and ignores the change payload, so skip boxing a `CGPoint` every frame.
         token = scrollView.observe(\.contentOffset, options: []) { [weak self] scrollView, _ in
             MainActor.assumeIsolated {
                 self?.handleOffsetChange(scrollView)
@@ -48,11 +39,7 @@ final class ScrollStopObserver {
         }
     }
 
-    /// Cancels the settle poll loop and tears down KVO. Idempotent — safe to
-    /// call on every `.onDisappear`. ARC also covers this on dealloc (the KVO
-    /// token self-invalidates, the `[weak self]` loop exits on the next tick),
-    /// but detaching on disappear stops the 60 ms poll promptly when a feed
-    /// scrolls off screen.
+    /// Cancels the settle poll loop and tears down KVO. Idempotent.
     func detach() {
         settleLoop?.cancel()
         settleLoop = nil
@@ -63,12 +50,8 @@ final class ScrollStopObserver {
     }
 
     private func handleOffsetChange(_ scrollView: UIScrollView) {
-        // Only a real user gesture (touch / drag / momentum) counts as scrolling.
-        // A `contentOffset` change with every flag clear is a programmatic or
-        // layout-driven shift — e.g. an ad row re-measuring its height the moment
-        // it mounts. Treating those as "scrolling" creates a feedback loop:
-        //   mount ad → measure → offset nudge → "scrolling" → unmount ad →
-        //   settle → remount → measure → … (rapid flap, ad never stabilises).
+        // Only a real user gesture (touch / drag / momentum) counts as scrolling;
+        // a change with every flag clear is a programmatic/layout-driven shift.
         guard scrollView.isDragging || scrollView.isTracking || scrollView.isDecelerating else {
             return
         }
@@ -104,23 +87,19 @@ final class ScrollStopObserver {
     }
 }
 
-/// Which SwiftUI scrolling container backs the tracked view. SwiftUIIntrospect
-/// resolves each through a different selector — `List` to its backing
-/// `UICollectionView`, `ScrollView` to a plain `UIScrollView` — so the tracker
-/// must be told which one to hook (the wrong selector silently never fires).
+/// Which SwiftUI scrolling container backs the tracked view — SwiftUIIntrospect
+/// resolves each through a different selector.
 public enum ScrollContainerKind: Sendable {
     case list
     case scrollView
 }
 
 extension View {
-    /// Observes the underlying `List`/`ScrollView`'s scroll view and reports its
-    /// phase to the `ScrollActivityClient` under `scope`: `.scrolling` on the
-    /// first movement of a gesture, `.idle` once it fully settles. Consumers read
-    /// it via `@Dependency(\.scrollActivity).phases(scope)`.
+    /// Observes the underlying `List`/`ScrollView` and reports its phase to the
+    /// `ScrollActivityClient` under `scope`.
     public func trackScrollActivity(
         _ container: ScrollContainerKind = .list,
-        scope: ScrollScope
+        scope: ScrollActivityClient.Scope
     ) -> some View {
         modifier(ScrollActivityModifier(container: container, scope: scope, onStop: nil))
     }
@@ -129,7 +108,7 @@ extension View {
     /// container comes fully to rest.
     public func onScrollStopped(
         _ container: ScrollContainerKind = .list,
-        scope: ScrollScope,
+        scope: ScrollActivityClient.Scope,
         action: @escaping () -> Void
     ) -> some View {
         modifier(ScrollActivityModifier(container: container, scope: scope, onStop: action))
@@ -138,15 +117,13 @@ extension View {
 
 private struct ScrollActivityModifier: ViewModifier {
     var container: ScrollContainerKind
-    var scope: ScrollScope
+    var scope: ScrollActivityClient.Scope
     var onStop: (() -> Void)?
 
     @Dependency(\.scrollActivity) private var scrollActivity
     @State private var observer = ScrollStopObserver()
 
     func body(content: Content) -> some View {
-        // `attach(to:)` guards re-attaching the same instance, so the repeated
-        // introspect callbacks stay idempotent on either branch.
         Group {
             switch container {
                 case .list:

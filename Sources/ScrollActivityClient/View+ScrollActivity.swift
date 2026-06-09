@@ -8,12 +8,10 @@ import SwiftUI
 
 extension View {
     /// Fires `action` whenever `scope`'s scroll surface is at rest **and**
-    /// `isLoaded()` returns `false`. Drives the "load a native ad only while the
-    /// list is idle" gate: the `.task` lives for the view's on-screen lifetime,
-    /// `phases(scope)` yields `.idle` only at rest, and `isLoaded` is re-checked
-    /// each tick so the load fires at most once and never mid-scroll.
+    /// `isLoaded()` returns `false`.
+    @available(macOS 12.0, *)
     public func loadWhenScrollIdle(
-        scope: ScrollScope,
+        scope: ScrollActivityClient.Scope,
         isLoaded: @escaping () -> Bool,
         perform action: @escaping () -> Void
     ) -> some View {
@@ -27,8 +25,9 @@ extension View {
     }
 }
 
+@available(macOS 12.0, *)
 private struct LoadWhenScrollIdleModifier: ViewModifier {
-    let scope: ScrollScope
+    let scope: ScrollActivityClient.Scope
     let isLoaded: () -> Bool
     let action: () -> Void
 
