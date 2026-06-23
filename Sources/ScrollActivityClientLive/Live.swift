@@ -11,7 +11,11 @@ extension ScrollActivityClient: DependencyKey {
         let hub = ScrollActivityHub()
         return ScrollActivityClient(
             phases: { scope in await hub.stream(scope) },
-            report: { scope, phase in await hub.report(scope, phase) }
+            report: { scope, phase in await hub.report(scope, phase) },
+            positions: { scope in await hub.positionStream(scope) },
+            reportPosition: { scope, position in await hub.reportPosition(scope, position) },
+            commands: { scope in await hub.commandStream(scope) },
+            scrollToTop: { scope in await hub.sendCommand(scope, .scrollToTop) }
         )
     }()
 }

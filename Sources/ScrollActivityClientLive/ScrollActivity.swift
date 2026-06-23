@@ -26,17 +26,37 @@ final class ScrollStopObserver {
 
     var onMove: (() -> Void)?
     var onStop: (() -> Void)?
+    /// Fires with the new value whenever the surface crosses its top edge —
+    /// `true` when it reaches the top, `false` when it leaves it. Unlike
+    /// `onMove`/`onStop`, this tracks *any* offset change (including
+    /// programmatic and momentum), so position stays accurate at rest.
+    var onTopChange: ((Bool) -> Void)?
+    private var wasAtTop = true
 
     func attach(to scrollView: UIScrollView) {
         // SwiftUIIntrospect's customize closure can fire repeatedly — wire KVO up
         // once per scroll view instance.
         guard self.scrollView !== scrollView else { return }
         self.scrollView = scrollView
+        wasAtTop = Self.isAtTop(scrollView)
         token = scrollView.observe(\.contentOffset, options: []) { [weak self] scrollView, _ in
             MainActor.assumeIsolated {
                 self?.handleOffsetChange(scrollView)
             }
         }
+    }
+
+    /// Scrolls the tracked view back to its top edge, animated. No-op if the
+    /// scroll view has gone away.
+    func scrollToTop() {
+        guard let scrollView else { return }
+        let top = -scrollView.adjustedContentInset.top
+        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: top), animated: true)
+    }
+
+    private static func isAtTop(_ scrollView: UIScrollView) -> Bool {
+        // 1pt tolerance absorbs sub-point rounding in the resting offset.
+        scrollView.contentOffset.y <= -scrollView.adjustedContentInset.top + 1
     }
 
     /// Cancels the settle poll loop and tears down KVO. Idempotent.
@@ -47,9 +67,18 @@ final class ScrollStopObserver {
         token = nil
         scrollView = nil
         isMoving = false
+        wasAtTop = true
     }
 
     private func handleOffsetChange(_ scrollView: UIScrollView) {
+        // Position tracks every offset change (programmatic, momentum, gesture),
+        // so the at-top edge stays accurate even when the view is not "scrolling".
+        let atTop = Self.isAtTop(scrollView)
+        if atTop != wasAtTop {
+            wasAtTop = atTop
+            onTopChange?(atTop)
+        }
+
         // Only a real user gesture (touch / drag / momentum) counts as scrolling;
         // a change with every flag clear is a programmatic/layout-driven shift.
         guard scrollView.isDragging || scrollView.isTracking || scrollView.isDecelerating else {
@@ -133,6 +162,15 @@ private struct ScrollActivityModifier: ViewModifier {
             }
         }
         .onDisappear { observer.detach() }
+        .task {
+            // Perform scroll-to-top (and any future) commands targeting this scope.
+            for await command in await scrollActivity.commands(scope) {
+                switch command {
+                    case .scrollToTop:
+                        observer.scrollToTop()
+                }
+            }
+        }
     }
 
     private func attach(_ scrollView: UIScrollView) {
@@ -142,6 +180,9 @@ private struct ScrollActivityModifier: ViewModifier {
         observer.onStop = {
             Task { await client.report(scope, .idle) }
             onStop?()
+        }
+        observer.onTopChange = { atTop in
+            Task { await client.reportPosition(scope, atTop ? .atTop : .scrolled) }
         }
         observer.attach(to: scrollView)
     }

@@ -20,6 +20,10 @@ extension ScrollActivityClient: TestDependencyKey {
 extension ScrollActivityClient {
     public static let noop = Self(
         phases: { _ in AsyncStream { _ in } },
-        report: { _, _ in }
+        report: { _, _ in },
+        positions: { _ in AsyncStream { _ in } },
+        reportPosition: { _, _ in },
+        commands: { _ in AsyncStream { _ in } },
+        scrollToTop: { _ in }
     )
 }
