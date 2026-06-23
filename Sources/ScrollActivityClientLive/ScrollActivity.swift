@@ -33,6 +33,14 @@ final class ScrollStopObserver {
     var onTopChange: ((Bool) -> Void)?
     private var wasAtTop = true
 
+    /// Delay after an animated scroll-to-top before re-checking whether it
+    /// actually reached the top — just past UIScrollView's ~0.3s programmatic
+    /// scroll animation.
+    private let scrollToTopReassertDelay = Duration.milliseconds(400)
+    /// Hard cap on automatic re-asserts so a perpetually-shifting estimate can
+    /// never loop forever.
+    private let maxScrollToTopReasserts = 3
+
     func attach(to scrollView: UIScrollView) {
         // SwiftUIIntrospect's customize closure can fire repeatedly — wire KVO up
         // once per scroll view instance.
@@ -49,9 +57,35 @@ final class ScrollStopObserver {
     /// Scrolls the tracked view back to its top edge, animated. No-op if the
     /// scroll view has gone away.
     func scrollToTop() {
+        reassertTop(attempt: 0)
+    }
+
+    /// Animates to the top edge, then re-asserts the target after the animation
+    /// settles if it landed short. SwiftUI `List` is backed by a self-sizing
+    /// collection view with *estimated* row heights, so off-screen rows above the
+    /// viewport resolve their real heights mid-animation and the content size
+    /// shifts — a single fire-once `setContentOffset` can stop below the true top
+    /// (the user then has to tap a second time). Re-issuing once the animation
+    /// finishes lets the estimate converge so a single tap reaches the top. Bounded
+    /// by `maxScrollToTopReasserts`, and never fights an in-flight user gesture.
+    private func reassertTop(attempt: Int) {
         guard let scrollView else { return }
         let top = -scrollView.adjustedContentInset.top
         scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: top), animated: true)
+        guard attempt < maxScrollToTopReasserts else { return }
+        let delay = scrollToTopReassertDelay
+        Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard let self,
+                let scrollView = self.scrollView,
+                !scrollView.isDragging,
+                !scrollView.isTracking,
+                !Self.isAtTop(scrollView)
+            else {
+                return
+            }
+            self.reassertTop(attempt: attempt + 1)
+        }
     }
 
     private static func isAtTop(_ scrollView: UIScrollView) -> Bool {
