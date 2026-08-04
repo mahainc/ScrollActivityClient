@@ -7,10 +7,11 @@ import Foundation
 import ScrollActivityClient
 
 /// Fans the latest phase out to every live `phases(scope)` subscriber,
-/// partitioned by scope so screens stay isolated. Carries three channels:
-/// `phase` (moving/idle) and `position` (top/scrolled) flow *up* from the
-/// surface and replay their latest value to new subscribers; `command`
-/// (e.g. scroll-to-top) flows *down* and is a transient event — no replay.
+/// partitioned by scope so screens stay isolated. Carries four channels:
+/// `phase` (moving/idle), `position` (top/scrolled), and `visibility` (the
+/// on-screen items at rest) flow *up* from the surface and replay their latest
+/// value to new subscribers; `command` (e.g. scroll-to-top) flows *down* and is
+/// a transient event — no replay.
 actor ScrollActivityHub {
     private var phaseContinuations:
         [ScrollActivityClient.Scope: [UUID: AsyncStream<ScrollActivityClient.Phase>.Continuation]] = [:]
@@ -22,6 +23,10 @@ actor ScrollActivityHub {
 
     private var commandContinuations:
         [ScrollActivityClient.Scope: [UUID: AsyncStream<ScrollActivityClient.Command>.Continuation]] = [:]
+
+    private var visibilityContinuations:
+        [ScrollActivityClient.Scope: [UUID: AsyncStream<ScrollActivityClient.VisibleItems>.Continuation]] = [:]
+    private var latestVisibility: [ScrollActivityClient.Scope: ScrollActivityClient.VisibleItems] = [:]
 
     // MARK: Phase channel (up)
 
@@ -70,6 +75,33 @@ actor ScrollActivityHub {
         guard let conts = positionContinuations[scope] else { return }
         for continuation in conts.values {
             continuation.yield(position)
+        }
+    }
+
+    // MARK: Visibility channel (up)
+
+    func visibilityStream(
+        _ scope: ScrollActivityClient.Scope
+    ) -> AsyncStream<ScrollActivityClient.VisibleItems> {
+        AsyncStream { continuation in
+            let id = UUID()
+            visibilityContinuations[scope, default: [:]][id] = continuation
+            continuation.yield(latestVisibility[scope] ?? .empty)
+            continuation.onTermination = { [weak self] _ in
+                Task { await self?.removeVisibilitySubscriber(id, scope: scope) }
+            }
+        }
+    }
+
+    func reportVisibleItems(
+        _ scope: ScrollActivityClient.Scope,
+        _ items: ScrollActivityClient.VisibleItems
+    ) {
+        guard (latestVisibility[scope] ?? .empty) != items else { return }  // edge-only
+        latestVisibility[scope] = items
+        guard let conts = visibilityContinuations[scope] else { return }
+        for continuation in conts.values {
+            continuation.yield(items)
         }
     }
 
@@ -124,6 +156,16 @@ actor ScrollActivityHub {
         commandContinuations[scope]?[id] = nil
         if commandContinuations[scope]?.isEmpty == true {
             commandContinuations[scope] = nil
+        }
+    }
+
+    private func removeVisibilitySubscriber(
+        _ id: UUID,
+        scope: ScrollActivityClient.Scope
+    ) {
+        visibilityContinuations[scope]?[id] = nil
+        if visibilityContinuations[scope]?.isEmpty == true {
+            visibilityContinuations[scope] = nil
         }
     }
 }

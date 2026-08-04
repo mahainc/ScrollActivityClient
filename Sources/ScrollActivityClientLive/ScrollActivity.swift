@@ -18,6 +18,11 @@ final class ScrollStopObserver {
     private var lastMovement = ContinuousClock.now
     private var isMoving = false
 
+    /// Which direction this surface scrolls. Position/scroll-to-top read the
+    /// offset and inset along this axis; set it before `attach`. Phase tracking
+    /// is axis-agnostic and ignores it.
+    var axis: ScrollActivityClient.Axis = .vertical
+
     /// How long `contentOffset` must stay quiet (with no active gesture/momentum)
     /// before the list is considered at rest.
     private let settleDelay = Duration.milliseconds(120)
@@ -46,7 +51,7 @@ final class ScrollStopObserver {
         // once per scroll view instance.
         guard self.scrollView !== scrollView else { return }
         self.scrollView = scrollView
-        wasAtTop = Self.isAtTop(scrollView)
+        wasAtTop = isAtStart(scrollView)
         token = scrollView.observe(\.contentOffset, options: []) { [weak self] scrollView, _ in
             MainActor.assumeIsolated {
                 self?.handleOffsetChange(scrollView)
@@ -70,8 +75,7 @@ final class ScrollStopObserver {
     /// by `maxScrollToTopReasserts`, and never fights an in-flight user gesture.
     private func reassertTop(attempt: Int) {
         guard let scrollView else { return }
-        let top = -scrollView.adjustedContentInset.top
-        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: top), animated: true)
+        scrollView.setContentOffset(startOffset(scrollView), animated: true)
         guard attempt < maxScrollToTopReasserts else { return }
         let delay = scrollToTopReassertDelay
         Task { [weak self] in
@@ -80,7 +84,7 @@ final class ScrollStopObserver {
                 let scrollView = self.scrollView,
                 !scrollView.isDragging,
                 !scrollView.isTracking,
-                !Self.isAtTop(scrollView)
+                !self.isAtStart(scrollView)
             else {
                 return
             }
@@ -88,9 +92,37 @@ final class ScrollStopObserver {
         }
     }
 
-    private static func isAtTop(_ scrollView: UIScrollView) -> Bool {
+    /// The scroll offset along the tracked axis (`.y` for vertical, `.x` for
+    /// horizontal); the cross-axis component is left untouched.
+    private func axisOffset(_ scrollView: UIScrollView) -> CGFloat {
+        switch axis {
+        case .vertical: scrollView.contentOffset.y
+        case .horizontal: scrollView.contentOffset.x
+        }
+    }
+
+    /// The content inset at the start edge along the tracked axis (`.top` for
+    /// vertical, `.left` for horizontal).
+    private func startInset(_ scrollView: UIScrollView) -> CGFloat {
+        switch axis {
+        case .vertical: scrollView.adjustedContentInset.top
+        case .horizontal: scrollView.adjustedContentInset.left
+        }
+    }
+
+    /// The resting content offset that pins the tracked axis to its start edge
+    /// while preserving the cross-axis position.
+    private func startOffset(_ scrollView: UIScrollView) -> CGPoint {
+        let start = -startInset(scrollView)
+        switch axis {
+        case .vertical: return CGPoint(x: scrollView.contentOffset.x, y: start)
+        case .horizontal: return CGPoint(x: start, y: scrollView.contentOffset.y)
+        }
+    }
+
+    private func isAtStart(_ scrollView: UIScrollView) -> Bool {
         // 1pt tolerance absorbs sub-point rounding in the resting offset.
-        scrollView.contentOffset.y <= -scrollView.adjustedContentInset.top + 1
+        axisOffset(scrollView) <= -startInset(scrollView) + 1
     }
 
     /// Cancels the settle poll loop and tears down KVO. Idempotent.
@@ -106,8 +138,8 @@ final class ScrollStopObserver {
 
     private func handleOffsetChange(_ scrollView: UIScrollView) {
         // Position tracks every offset change (programmatic, momentum, gesture),
-        // so the at-top edge stays accurate even when the view is not "scrolling".
-        let atTop = Self.isAtTop(scrollView)
+        // so the at-start edge stays accurate even when the view is not "scrolling".
+        let atTop = isAtStart(scrollView)
         if atTop != wasAtTop {
             wasAtTop = atTop
             onTopChange?(atTop)
@@ -159,28 +191,37 @@ public enum ScrollContainerKind: Sendable {
 
 extension View {
     /// Observes the underlying `List`/`ScrollView` and reports its phase to the
-    /// `ScrollActivityClient` under `scope`.
+    /// `ScrollActivityClient` under `scope`. Pass `axis: .horizontal` for a
+    /// sideways-scrolling surface so position and scroll-to-top track the
+    /// leading edge instead of the top.
     public func trackScrollActivity(
         _ container: ScrollContainerKind = .list,
-        scope: ScrollActivityClient.Scope
+        scope: ScrollActivityClient.Scope,
+        axis: ScrollActivityClient.Axis = .vertical
     ) -> some View {
-        modifier(ScrollActivityModifier(container: container, scope: scope, onStop: nil))
+        modifier(
+            ScrollActivityModifier(container: container, scope: scope, axis: axis, onStop: nil)
+        )
     }
 
-    /// Like `trackScrollActivity(_:scope:)`, plus fires `action` each time the
-    /// container comes fully to rest.
+    /// Like `trackScrollActivity(_:scope:axis:)`, plus fires `action` each time
+    /// the container comes fully to rest.
     public func onScrollStopped(
         _ container: ScrollContainerKind = .list,
         scope: ScrollActivityClient.Scope,
+        axis: ScrollActivityClient.Axis = .vertical,
         action: @escaping () -> Void
     ) -> some View {
-        modifier(ScrollActivityModifier(container: container, scope: scope, onStop: action))
+        modifier(
+            ScrollActivityModifier(container: container, scope: scope, axis: axis, onStop: action)
+        )
     }
 }
 
 private struct ScrollActivityModifier: ViewModifier {
     var container: ScrollContainerKind
     var scope: ScrollActivityClient.Scope
+    var axis: ScrollActivityClient.Axis
     var onStop: (() -> Void)?
 
     @Dependency(\.scrollActivity) private var scrollActivity
@@ -210,6 +251,7 @@ private struct ScrollActivityModifier: ViewModifier {
     private func attach(_ scrollView: UIScrollView) {
         let client = scrollActivity
         let scope = scope
+        observer.axis = axis
         observer.onMove = { Task { await client.report(scope, .scrolling) } }
         observer.onStop = {
             Task { await client.report(scope, .idle) }

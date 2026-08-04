@@ -30,4 +30,14 @@ public struct ScrollActivityClient: Sendable {
     }
     /// Asks `scope`'s scroll surface to scroll back to its top, animated.
     public var scrollToTop: @Sendable (_ scope: Scope) async -> Void
+
+    /// A multicast stream of the items on screen each time `scope` settles. New
+    /// subscribers receive the scope's current snapshot immediately, then every
+    /// subsequent change.
+    public var visibleItems: @Sendable (_ scope: Scope) async -> AsyncStream<VisibleItems> = { _ in
+        AsyncStream { _ in }
+    }
+    /// Publishes the items on screen for `scope`. Called by the view's tracker
+    /// once the surface comes to rest.
+    public var reportVisibleItems: @Sendable (_ scope: Scope, _ items: VisibleItems) async -> Void
 }

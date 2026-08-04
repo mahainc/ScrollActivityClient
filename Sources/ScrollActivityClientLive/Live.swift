@@ -15,7 +15,9 @@ extension ScrollActivityClient: DependencyKey {
             positions: { scope in await hub.positionStream(scope) },
             reportPosition: { scope, position in await hub.reportPosition(scope, position) },
             commands: { scope in await hub.commandStream(scope) },
-            scrollToTop: { scope in await hub.sendCommand(scope, .scrollToTop) }
+            scrollToTop: { scope in await hub.sendCommand(scope, .scrollToTop) },
+            visibleItems: { scope in await hub.visibilityStream(scope) },
+            reportVisibleItems: { scope, items in await hub.reportVisibleItems(scope, items) }
         )
     }()
 }

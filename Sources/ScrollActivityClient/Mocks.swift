@@ -24,6 +24,8 @@ extension ScrollActivityClient {
         positions: { _ in AsyncStream { _ in } },
         reportPosition: { _, _ in },
         commands: { _ in AsyncStream { _ in } },
-        scrollToTop: { _ in }
+        scrollToTop: { _ in },
+        visibleItems: { _ in AsyncStream { _ in } },
+        reportVisibleItems: { _, _ in }
     )
 }
